@@ -5,7 +5,10 @@ from calibre.gui2.actions import InterfaceAction
 from qt.core import QIcon, QPixmap
 
 from calibre_plugins.wxread_annotation_plugin.dialog import PasteAnnotationsDialog
-from calibre_plugins.wxread_annotation_plugin.importer import import_annotations_for_book
+from calibre_plugins.wxread_annotation_plugin.importer import (
+    commit_annotations_for_book,
+    import_annotations_for_book,
+)
 from calibre_plugins.wxread_annotation_plugin.parser import parse_raw_annotations
 from calibre_plugins.wxread_annotation_plugin.review_dialog import ImportReviewDialog
 
@@ -33,30 +36,6 @@ class AnnotationImportAction(InterfaceAction):
             pass
         self.qaction.triggered.connect(self.import_annotations)
 
-
-    def initialization_complete(self):
-        should_open = question_dialog(
-            self.gui,
-            '导入标注',
-            (
-                '插件已安装。\n\n'
-                '是否现在打开“首选项 -> 工具栏和菜单”，\n'
-                '选择“导入标注”显示在工具栏和右键菜单中的位置？'
-            ),
-            show_copy_button=False,
-        )
-        if not should_open:
-            return
-
-        pref_action = self.gui.iactions.get('Preferences')
-        if pref_action is None:
-            return error_dialog(
-                self.gui,
-                '导入标注',
-                '无法打开“工具栏和菜单”配置页，请手动在首选项中打开。',
-                show=True,
-            )
-        pref_action.do_config(initial_plugin=('Interface', 'Toolbar'))
 
     def import_annotations(self):
         ids = self.gui.library_view.get_selected_ids()
@@ -93,11 +72,19 @@ class AnnotationImportAction(InterfaceAction):
             )
 
         if review_rows:
-            ImportReviewDialog(self.gui, review_rows, db, book_id, total_count=imported_count).exec()
+            review = ImportReviewDialog(self.gui, review_rows, total_count=imported_count)
+            if review.exec() != review.DialogCode.Accepted:
+                return info_dialog(
+                    self.gui,
+                    '导入标注',
+                    '已取消导入，本次没有写入任何标注。',
+                    show=True,
+                )
+        committed = commit_annotations_for_book(db, book_id, review_rows)
         info_dialog(
             self.gui,
             '导入标注',
-            f'已导入 {imported_count} 条标注。',
+            f'已导入 {committed} 条标注。',
             show=True,
         )
 

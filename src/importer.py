@@ -201,8 +201,16 @@ def import_annotations_for_book(db_api, book_id: int, annotations: list[dict]) -
             }
         )
 
-    _merge_with_existing_annotations(db_api, book_id, fmt, annots_list)
     for i, row in enumerate(review_rows):
         row['annot'] = copy.deepcopy(annots_list[i])
-    db_api.merge_annotations_for_book(book_id, fmt, annots_list, user_type='local', user='viewer')
     return len(annots_list), review_rows
+
+
+def commit_annotations_for_book(db_api, book_id: int, review_rows: list[dict]) -> int:
+    if not review_rows:
+        return 0
+    fmt = review_rows[0].get('fmt')
+    annots_list = [copy.deepcopy(r['annot']) for r in review_rows]
+    _merge_with_existing_annotations(db_api, book_id, fmt, annots_list)
+    db_api.merge_annotations_for_book(book_id, fmt, annots_list, user_type='local', user='viewer')
+    return len(annots_list)

@@ -46,13 +46,11 @@ def _candidate_combo_label(idx: int, cand: dict) -> str:
 class ImportReviewDialog(QDialog):
     """导入后检查：第一列为标注摘要，第二列为书中匹配（多候选时为下拉框）。"""
 
-    def __init__(self, parent, review_rows: list[dict], db_api, book_id: int, total_count: int | None = None):
+    def __init__(self, parent, review_rows: list[dict], total_count: int | None = None):
         super().__init__(parent)
         n = total_count if total_count is not None else len(review_rows)
         self.setWindowTitle(f'导入标注 - 检查（共 {n} 条）')
         self.resize(920, 560)
-        self._db_api = db_api
-        self._book_id = book_id
         self._rows = review_rows
         self._combos: list[QComboBox | None] = []
 
@@ -152,14 +150,6 @@ class ImportReviewDialog(QDialog):
             annot['start_cfi'] = cand['start_cfi']
             annot['end_cfi'] = cand['end_cfi']
             annot['toc_family_titles'] = cand.get('toc_family_titles', annot.get('toc_family_titles', []))
-            fmt = row['fmt']
-            self._db_api.merge_annotations_for_book(
-                self._book_id,
-                fmt,
-                [annot],
-                user_type='local',
-                user='viewer',
-            )
             row['chosen_index'] = new_i
             row['annot'] = annot
         self.accept()

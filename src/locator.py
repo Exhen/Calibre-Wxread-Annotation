@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import re
+import unicodedata
 import xml.etree.ElementTree as ET
 import zipfile
 from io import BytesIO
@@ -17,7 +18,44 @@ MAX_ANNOTATION_MATCHES = 10
 
 
 def _normalize_text(text: str) -> str:
-    return WS_RE.sub(' ', (text or '')).strip()
+    if not text:
+        return ''
+    chars: list[str] = []
+    prev_was_space = True
+    for ch in text:
+        folded = _fold_char_for_match(ch)
+        if not folded:
+            continue
+        if folded.isspace():
+            if not prev_was_space:
+                chars.append(' ')
+            prev_was_space = True
+        else:
+            chars.append(folded)
+            prev_was_space = False
+    return ''.join(chars).strip()
+
+
+def _fold_char_for_match(ch: str) -> str:
+    # 统一常见全角/兼容字符
+    ch = unicodedata.normalize('NFKC', ch)
+    if not ch:
+        return ''
+    # 统一各种引号/破折号
+    ch = (
+        ch.replace('“', '"').replace('”', '"')
+        .replace('‘', "'").replace('’', "'")
+        .replace('—', '-').replace('–', '-')
+        .replace('…', '.')
+    )
+    # 空白统一为空格
+    if ch.isspace():
+        return ' '
+    # 忽略纯标点/符号差异（例如中英文标点、书名号、间隔号）
+    cat = unicodedata.category(ch[0])
+    if cat.startswith('P') or cat.startswith('S'):
+        return ''
+    return ch.casefold()
 
 
 def _html_to_plain_text(src: str) -> str:
@@ -161,9 +199,33 @@ def _normalized_stream_with_mapping(xhtml_text: str) -> tuple[str, list[tuple[st
     try:
         root = ET.fromstring(xhtml_text)
     except ET.ParseError:
-        plain = _normalize_text(_html_to_plain_text(xhtml_text))
-        mapping = [('/2/1', i) for i in range(len(plain))]
-        return plain, mapping
+        plain_src = _html_to_plain_text(xhtml_text)
+        stream_chars: list[str] = []
+        mapping: list[tuple[str, int]] = []
+        prev_was_space = True
+        for i, ch in enumerate(plain_src):
+            folded = _fold_char_for_match(ch)
+            if not folded:
+                continue
+            if folded.isspace():
+                if not prev_was_space:
+                    stream_chars.append(' ')
+                    mapping.append(('/2/1', i))
+                prev_was_space = True
+            else:
+                stream_chars.append(folded)
+                mapping.append(('/2/1', i))
+                prev_was_space = False
+        normalized = ''.join(stream_chars).strip()
+        if not normalized:
+            return '', []
+        left = 0
+        right = len(stream_chars)
+        while left < right and stream_chars[left] == ' ':
+            left += 1
+        while right > left and stream_chars[right - 1] == ' ':
+            right -= 1
+        return ''.join(stream_chars[left:right]), mapping[left:right]
 
     # Document root -> html 元素的 cfi 第一步通常是 /2
     root_cfi = '/2'
@@ -173,13 +235,16 @@ def _normalized_stream_with_mapping(xhtml_text: str) -> tuple[str, list[tuple[st
 
     for text, cfi in _iter_text_nodes_with_cfi(root, root_cfi):
         for idx, ch in enumerate(text):
-            if ch.isspace():
+            folded = _fold_char_for_match(ch)
+            if not folded:
+                continue
+            if folded.isspace():
                 if not prev_was_space:
                     stream_chars.append(' ')
                     mapping.append((cfi, idx))
                 prev_was_space = True
             else:
-                stream_chars.append(ch)
+                stream_chars.append(folded)
                 mapping.append((cfi, idx))
                 prev_was_space = False
 
@@ -229,6 +294,15 @@ def _find_exact_cfi_candidates(xhtml_text: str, needle: str, max_matches: int | 
     return candidates
 
 
+def _rough_contains(chapter_text: str, source_text: str) -> bool:
+    if not chapter_text or not source_text:
+        return False
+    if source_text in chapter_text:
+        return True
+    # 空白无关包含判断，避免“标点被折叠为空格”导致的漏检
+    return source_text.replace(' ', '') in chapter_text.replace(' ', '')
+
+
 def locate_annotation_candidates(db_api, book_id: int, fmt: str, annotation: dict) -> list[dict]:
     if fmt.upper() not in ('EPUB', 'KEPUB'):
         return []
@@ -268,7 +342,7 @@ def locate_annotation_candidates(db_api, book_id: int, fmt: str, annotation: dic
         for spine_index, spine_name, chapter_text in _read_epub_spine_docs(epub_data):
             if len(candidates) >= MAX_ANNOTATION_MATCHES:
                 break
-            if not chapter_text or source_text not in chapter_text:
+            if not _rough_contains(chapter_text, source_text):
                 continue
             try:
                 raw = zf.read(spine_name)
